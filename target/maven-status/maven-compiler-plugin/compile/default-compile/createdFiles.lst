@@ -11,10 +11,12 @@ Main\MatrixBackground$MatrixColumn.class
 Main\GameManager.class
 Main\MatrixDodgerTitleScreen$MatrixColumn.class
 Main\LifePack.class
+Main\SplashScreen.class
 Main\SpriteAnimator.class
 com\mycompany\matrixdodger\Player.class
 Main\Main$1.class
 Main\MatrixBackground.class
+Main\Main$2.class
 com\mycompany\matrixdodger\TitleScreen.class
 Main\MatrixDodgerTitleScreen$1.class
 com\mycompany\matrixdodger\MatrixDodger.class
