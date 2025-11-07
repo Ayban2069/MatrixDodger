@@ -173,7 +173,7 @@ private final int TOTAL_FRAMES = 7;
 
 private void startIdleAnimation() {
     loadSpriteFrames(); // load your images first
-    idleAnimationTimer = new Timer(200, e -> {
+    idleAnimationTimer = new Timer(50, e -> {
         animationFrame = (animationFrame + 1) % TOTAL_FRAMES;
         updateCharacterAnimation();
     });
@@ -184,7 +184,7 @@ private void loadSpriteFrames() {
     idleFrames = new BufferedImage[TOTAL_FRAMES];
     try {
         for (int i = 0; i < TOTAL_FRAMES; i++) {
-            String path = "Main\\resources\\sprites\\Gamer Gabby\\frame"+ i +".png";
+            String path = "/sprites/GamerGabby/frame"+i+".png";
             URL resource = getClass().getResource(path);
             if (resource != null) {
                 idleFrames[i] = ImageIO.read(resource);
