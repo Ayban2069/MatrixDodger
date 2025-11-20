@@ -2,14 +2,23 @@ package Main;
 
 import javax.swing.*;
 import java.awt.*;
-import java.awt.event.KeyAdapter;
-import java.awt.event.KeyEvent;
+import java.awt.event.*;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Random;
-import java.util.Iterator;
+import java.awt.image.BufferedImage;
 
+/**
+ * GameArena - cleaned & fixed:
+ * - hamburger/menu button reliably positioned and visible
+ * - borderless pause overlay that freezes gameLoop
+ * - resume restores keyboard focus
+ * - quit returns to HomeScreen
+ * - preserved Sandevistan / TimeStop / trails / projectiles behavior
+ */
 public class GameArena extends JPanel {
+
     private Player player;
 
     // Physics
@@ -23,33 +32,48 @@ public class GameArena extends JPanel {
 
     // Dash
     private int dashDistance = 200;
-    private int dashCooldown = 1000; // 1 sec
+    private int dashCooldown = 1000;
     private long lastDashTime = 0;
     private int dashVelocityX = 0;
-    private int dashDuration = 8; // frames
+    private int dashDuration = 8;
     private int dashFramesLeft = 0;
 
-    // Movement flags
     private boolean movingLeft = false;
     private boolean movingRight = false;
     private int moveSpeed = 5;
 
+    // Pause System (single source of truth)
+    private boolean gamePaused = false;
+    private Timer gameLoop;
+    
+    // Adjustable offsets for menu button position (tweak these values as needed)
+    private int menuButtonXOffset = 65;  // Distance from right edge (higher = more left)
+    private int menuButtonYOffset = 25;  // Distance from top edge (higher = lower)
+
+    // UI
+    private JButton menuButton;
+    private JPanel pauseOverlay;
+
     // Sandevistan
     private boolean sandevistanActive = false;
-    private int sandevistanDuration = 240; // ~2 sec
+    private int sandevistanDuration = 240;
     private int sandevistanFramesLeft = 0;
-    private int sandevistanCooldown = 5000; // 5 sec
+    private int sandevistanCooldown = 10000;
     private long lastSandevistanTime = 0;
 
     // Time Stop
     private boolean timeStopActive = false;
-    private int timeStopDuration = 300; // 5 sec
+    private int timeStopDuration = 300;
     private int timeStopFramesLeft = 0;
-    private int timeStopCooldown = 60000; // 1 min
+    private int timeStopCooldown = 30000;
     private long lastTimeStopTime = 0;
+    private int flashingDuration = 50;
+    private int flashingFramesLeft = 0;
 
-    // Trail effect for Sandevistan
-    private int[][] trailPositions = new int[10][2];
+    // TRAIL — stores sprite frames
+    private final int TRAIL_SIZE = 12;
+    private BufferedImage[] trailFrames = new BufferedImage[TRAIL_SIZE];
+    private int[][] trailPositions = new int[TRAIL_SIZE][2];
     private int trailIndex = 0;
 
     // Projectiles
@@ -60,21 +84,66 @@ public class GameArena extends JPanel {
     public GameArena() {
         setFocusable(true);
         setBackground(Color.BLACK);
-        player = new Player(250, 100, 32, 32, 5, 3);
+        setLayout(null); // we use absolute positioning for menu/overlay
+
+        player = new Player(250, 100, 64, 64, 5, 3);
 
         setupKeyListener();
 
-        Timer gameLoop = new Timer(16, e -> update());
+        gameLoop = new Timer(16, e -> {
+            if (!gamePaused) update();
+            else repaint(); // still repaint so overlay & UI remain responsive
+        });
         gameLoop.start();
+
+        setupMenuButton();
+
+        // Ensure components get proper bounds after being shown/resized
+        addComponentListener(new ComponentAdapter() {
+            @Override
+            public void componentResized(ComponentEvent e) {
+                positionMenuButton();
+                if (pauseOverlay != null) {
+                    positionPauseOverlay();
+                }
+            }
+
+            @Override
+            public void componentShown(ComponentEvent e) {
+                requestFocusInWindow();
+            }
+        });
+
+        // get focus when added to frame
+        addHierarchyListener(e -> {
+            if ((e.getChangeFlags() & HierarchyEvent.SHOWING_CHANGED) != 0 && isShowing()) {
+                requestFocusInWindow();
+            }
+        });
     }
 
     private void setupKeyListener() {
+        // Using anonymous listener so key events go to this panel (must be focused)
         addKeyListener(new KeyAdapter() {
             @Override
             public void keyPressed(KeyEvent e) {
+                // If paused, ignore game controls (but allow Escape to resume)
+                if (gamePaused) {
+                    if (e.getKeyCode() == KeyEvent.VK_ESCAPE) closePauseOverlay();
+                    return;
+                }
+
                 switch (e.getKeyCode()) {
-                    case KeyEvent.VK_A -> movingLeft = true;
-                    case KeyEvent.VK_D -> movingRight = true;
+                    case KeyEvent.VK_A -> {
+                        movingLeft = true;
+                        player.setFacingLeft(true);
+                        movingLeft = true;
+                    }
+                    case KeyEvent.VK_D -> {
+                        movingRight = true;
+                        player.setFacingLeft(false);
+                        movingRight = true;
+                    }
                     case KeyEvent.VK_SPACE -> {
                         if (jumpsUsed < maxJumps) {
                             velocityY = jumpStrength;
@@ -84,31 +153,38 @@ public class GameArena extends JPanel {
                     case KeyEvent.VK_Q -> dash();
                     case KeyEvent.VK_E -> activateSandevistan();
                     case KeyEvent.VK_R -> activateTimeStop();
+                    case KeyEvent.VK_ESCAPE -> openPauseOverlay();
                 }
             }
 
             @Override
             public void keyReleased(KeyEvent e) {
-                switch (e.getKeyCode()) {
-                    case KeyEvent.VK_A -> movingLeft = false;
-                    case KeyEvent.VK_D -> movingRight = false;
+                if (e.getKeyCode() == KeyEvent.VK_A) movingLeft = false;
+                if (e.getKeyCode() == KeyEvent.VK_D) movingRight = false;
+
+                if (!movingLeft && !movingRight) {
+                    player.stopRunning();
                 }
             }
         });
     }
 
-    // --- Dash ---
+    // ================================
+    // DASH
+    // ================================
     private void dash() {
         long now = System.currentTimeMillis();
         if (now - lastDashTime > dashCooldown) {
-            int dashDir = movingRight ? 1 : (movingLeft ? -1 : 1);
-            dashVelocityX = dashDir * (dashDistance / dashDuration);
+            int dir = movingRight ? 1 : (movingLeft ? -1 : 1);
+            dashVelocityX = dir * (dashDistance / dashDuration);
             dashFramesLeft = dashDuration;
             lastDashTime = now;
         }
     }
 
-    // --- Sandevistan ---
+    // ================================
+    // SANDEVISTAN
+    // ================================
     private void activateSandevistan() {
         long now = System.currentTimeMillis();
         if (!sandevistanActive && now - lastSandevistanTime > sandevistanCooldown) {
@@ -118,66 +194,69 @@ public class GameArena extends JPanel {
         }
     }
 
-    // --- Time Stop ---
+    // ================================
+    // TIME STOP
+    // ================================
     private void activateTimeStop() {
         long now = System.currentTimeMillis();
         if (!timeStopActive && now - lastTimeStopTime > timeStopCooldown) {
             timeStopActive = true;
             timeStopFramesLeft = timeStopDuration;
+            flashingFramesLeft = flashingDuration;
             lastTimeStopTime = now;
         }
     }
 
     private void update() {
-        // --- Time Stop logic ---
+        // Update animation EVERY frame
+        player.updateAnimation();
+
+        // TIME STOP TIMER
         if (timeStopActive) {
             timeStopFramesLeft--;
-            if (timeStopFramesLeft <= 0) {
-                timeStopActive = false;
-            }
+            if (timeStopFramesLeft <= 0) timeStopActive = false;
+            if (flashingFramesLeft > 0) flashingFramesLeft--;
         }
 
         // Gravity
         velocityY += gravity;
-        playerFall();
+        applyGravity();
 
-        // Normal / Sandevistan movement
-        if (!timeStopActive) {
-            if (sandevistanActive) {
-                if (sandevistanFramesLeft > 0) {
-                    velocityY += gravity * 0.3;
-                    if (movingLeft && dashFramesLeft == 0 && player.getX() > 20) {
-                        setPlayerX(player.getX() - (int) (moveSpeed * 1.5));
-                    }
-                    if (movingRight && dashFramesLeft == 0 && player.getX() + player.getWidth() < getWidth() - 20) {
-                        setPlayerX(player.getX() + (int) (moveSpeed * 1.5));
-                    }
-                    sandevistanFramesLeft--;
-                } else {
-                    sandevistanActive = false;
+        // Movement
+        if (sandevistanActive) {
+            if (sandevistanFramesLeft > 0) {
+                // move and ensure facing updates
+                if (movingLeft && dashFramesLeft == 0) {
+                    player.moveLeft();
+                    player.setFacingLeft(true);
+                    // small extra boost while sandevistan (optional)
+                    player.setX(player.getX() - (int) (moveSpeed * 0.5));
                 }
+                if (movingRight && dashFramesLeft == 0) {
+                    player.moveRight();
+                    player.setFacingLeft(false);
+                    player.setX(player.getX() + (int) (moveSpeed * 0.5));
+                }
+                sandevistanFramesLeft--;
             } else {
-                if (movingLeft && dashFramesLeft == 0 && player.getX() > 20) {
-                    setPlayerX(player.getX() - moveSpeed);
-                }
-                if (movingRight && dashFramesLeft == 0 && player.getX() + player.getWidth() < getWidth() - 20) {
-                    setPlayerX(player.getX() + moveSpeed);
-                }
+                sandevistanActive = false;
             }
+        } else {
+            if (movingLeft && dashFramesLeft == 0) player.moveLeft();
+            if (movingRight && dashFramesLeft == 0) player.moveRight();
         }
 
-        // Dash motion
+        // DASH
         if (dashFramesLeft > 0) {
-            int newX = player.getX() + dashVelocityX;
-            if (newX < 20) newX = 20;
-            if (newX + player.getWidth() > getWidth() - 20)
-                newX = getWidth() - 20 - player.getWidth();
-            setPlayerX(newX);
+            player.setX(player.getX() + dashVelocityX);
             dashFramesLeft--;
             if (dashFramesLeft == 0) dashVelocityX = 0;
         }
 
-        // Spawn projectiles (disabled if Time Stop active)
+        // TRAIL
+        storeTrailFrame();
+
+        // Projectiles spawn
         if (!timeStopActive) {
             spawnTimer++;
             if (spawnTimer > 60) {
@@ -186,7 +265,7 @@ public class GameArena extends JPanel {
             }
         }
 
-        // Update projectiles (freeze if Time Stop)
+        // Update projectiles
         Iterator<Projectile> it = projectiles.iterator();
         while (it.hasNext()) {
             Projectile p = it.next();
@@ -194,79 +273,217 @@ public class GameArena extends JPanel {
                 p.setSlowed(sandevistanActive);
                 p.update(getWidth(), getHeight());
             }
-            if (p.shouldRemove()) {
-                it.remove();
-            }
+            if (p.shouldRemove()) it.remove();
         }
 
-        // Trail (Sandevistan)
-        trailPositions[trailIndex][0] = player.getX();
-        trailPositions[trailIndex][1] = player.getY();
-        trailIndex = (trailIndex + 1) % trailPositions.length;
-
+        clampPlayerPosition();
         repaint();
     }
 
-    private void playerFall() {
-        int newY = player.getY() + velocityY;
-        if (newY + player.getHeight() >= getHeight() - 20) {
-            newY = getHeight() - 20 - player.getHeight();
+    private void applyGravity() {
+        int ny = player.getY() + velocityY;
+        int floor = getHeight() - 20 - player.getHeight();
+        if (ny >= floor) {
+            ny = floor;
             velocityY = 0;
             jumpsUsed = 0;
         }
-        setPlayerY(newY);
+        player.setY(ny);
     }
 
-    private void setPlayerY(int y) {
-        try {
-            var fieldY = Player.class.getDeclaredField("y");
-            fieldY.setAccessible(true);
-            fieldY.setInt(player, y);
-        } catch (Exception ignored) {}
-    }
-
-    private void setPlayerX(int x) {
-        try {
-            var fieldX = Player.class.getDeclaredField("x");
-            fieldX.setAccessible(true);
-            fieldX.setInt(player, x);
-        } catch (Exception ignored) {}
+    // Store sprite frame in trail buffer
+    private void storeTrailFrame() {
+        trailFrames[trailIndex] = player.getCurrentFrame();
+        trailPositions[trailIndex][0] = player.getX();
+        trailPositions[trailIndex][1] = player.getY();
+        trailIndex = (trailIndex + 1) % TRAIL_SIZE;
     }
 
     private void spawnProjectile() {
-        int arenaLeft = 20;
-        int arenaRight = getWidth() - 20;
-        int arenaTop = 20;
-        int arenaBottom = getHeight() - 20;
+        int left = 20, right = getWidth() - 20;
+        int top = 20, bottom = getHeight() - 20;
 
-        if (arenaRight - arenaLeft < 10 || arenaBottom - arenaTop < 10) return;
+        if (right - left < 10 || bottom - top < 10) return;
 
-        int side = random.nextInt(3); // top, left, right
-        double x = 0, y = 0;
-        double speedX = 0, speedY = 0;
+        int side = random.nextInt(3);
+        double x = 0, y = 0, sx = 0, sy = 0;
 
         switch (side) {
             case 0 -> { // top
-                x = arenaLeft + random.nextInt(Math.max(1, arenaRight - arenaLeft - 10));
-                y = arenaTop;
-                speedX = random.nextBoolean() ? 2 : -2;
-                speedY = 3;
+                x = left + random.nextInt(Math.max(1, right - left));
+                y = top;
+                sx = random.nextBoolean() ? 2 : -2;
+                sy = 3;
             }
             case 1 -> { // left
-                x = arenaLeft;
-                y = arenaTop + random.nextInt(Math.max(1, arenaBottom - arenaTop - 10));
-                speedX = 3;
-                speedY = random.nextBoolean() ? 2 : -2;
+                x = left;
+                y = top + random.nextInt(Math.max(1, bottom - top));
+                sx = 3;
+                sy = random.nextBoolean() ? 2 : -2;
             }
             default -> { // right
-                x = arenaRight - 10;
-                y = arenaTop + random.nextInt(Math.max(1, arenaBottom - arenaTop - 10));
-                speedX = -3;
-                speedY = random.nextBoolean() ? 2 : -2;
+                x = right - 10;
+                y = top + random.nextInt(Math.max(1, bottom - top));
+                sx = -3;
+                sy = random.nextBoolean() ? 2 : -2;
             }
         }
 
-        projectiles.add(new Projectile(x, y, speedX, speedY, 16));
+        projectiles.add(new Projectile(x, y, sx, sy, 16));
+    }
+
+    private Color getRainbowColor(int index) {
+        float hue = (System.currentTimeMillis() % 2000) / 2000f;
+        hue += (index * 0.05f);
+        return Color.getHSBColor(hue % 1f, 1f, 1f);
+    }
+
+    private void clampPlayerPosition() {
+        int arenaLeft = 20;
+        int arenaTop = 20;
+        int arenaRight = getWidth() - 20;
+        int arenaBottom = getHeight() - 20;
+
+        if (player.getX() < arenaLeft) player.setX(arenaLeft);
+        if (player.getX() + player.getWidth() > arenaRight)
+            player.setX(arenaRight - player.getWidth());
+        if (player.getY() < arenaTop) player.setY(arenaTop);
+        if (player.getY() + player.getHeight() > arenaBottom)
+            player.setY(arenaBottom - player.getHeight());
+    }
+
+    // ----------------------------
+    // Menu button + pause overlay
+    // ----------------------------
+    private void setupMenuButton() {
+        menuButton = new JButton("☰");  // Use HTML to create three horizontal lines
+        menuButton.setFont(new Font("VT323", Font.BOLD, 22));
+        menuButton.setForeground(Color.GREEN);
+        menuButton.setBackground(Color.BLACK);
+        menuButton.setBorder(BorderFactory.createLineBorder(Color.GREEN));
+        menuButton.setFocusPainted(false);
+
+        // Make it visually borderless and non-opaque so it feels "matrixy"
+        menuButton.setContentAreaFilled(false);
+        menuButton.setOpaque(false);
+
+        // Don't let the button steal keyboard focus
+        menuButton.setFocusable(false);
+
+        menuButton.addActionListener(e -> {
+            // toggle overlay: open if closed, close if already open
+            if (gamePaused) closePauseOverlay();
+            else openPauseOverlay();
+        });
+
+        add(menuButton);
+        positionMenuButton();
+    }
+
+
+
+
+    private void positionMenuButton() {
+        // Position within arena border and account for component size
+        int bx = getWidth() - menuButtonXOffset;
+        if (bx < 30) bx = getWidth() - 40; // fallback
+        int by = menuButtonYOffset;
+        menuButton.setBounds(bx, by, 40, 40);
+        menuButton.revalidate();
+        menuButton.repaint();
+        // ensure button is on top
+        setComponentZOrder(menuButton, 0);
+    }
+
+    private void openPauseOverlay() {
+        if (pauseOverlay != null) return; // already open
+        gamePaused = true;
+
+        pauseOverlay = new JPanel(null);
+        pauseOverlay.setBackground(new Color(0, 0, 0, 180));
+        pauseOverlay.setOpaque(true);
+        positionPauseOverlay();
+
+        // Resume button
+        JButton resumeBtn = new JButton("RESUME");
+        resumeBtn.setFont(new Font("VT323", Font.BOLD, 28));
+        resumeBtn.setForeground(Color.GREEN);
+        resumeBtn.setBackground(Color.BLACK);
+        resumeBtn.setBorder(BorderFactory.createLineBorder(Color.GREEN));
+        resumeBtn.setBorderPainted(true);
+        resumeBtn.setFocusPainted(false);
+        resumeBtn.setContentAreaFilled(false);
+        resumeBtn.setBounds((pauseOverlay.getWidth() - 200) / 2, 180, 200, 50);
+        resumeBtn.addActionListener(e -> closePauseOverlay());
+
+        // Quit button
+        JButton quitBtn = new JButton("QUIT");
+        quitBtn.setFont(new Font("VT323", Font.BOLD, 28));
+        quitBtn.setForeground(Color.RED);
+        quitBtn.setBackground(Color.BLACK);
+        quitBtn.setBorder(BorderFactory.createLineBorder(Color.GREEN));
+        quitBtn.setBorderPainted(true);
+        quitBtn.setFocusPainted(false);
+        quitBtn.setContentAreaFilled(false);
+        quitBtn.setBounds((pauseOverlay.getWidth() - 200) / 2, 260, 200, 50);
+        quitBtn.addActionListener(e -> {
+            closePauseOverlay();
+            goToHomeScreen();
+        });
+
+        pauseOverlay.add(resumeBtn);
+        pauseOverlay.add(quitBtn);
+
+        // Add overlay above everything
+        add(pauseOverlay);
+        setComponentZOrder(pauseOverlay, 0); // ensure it paints above
+        repaint();
+
+        // ensure keyboard focus returns to this panel after overlay is opened, so ESC works
+        SwingUtilities.invokeLater(() -> requestFocusInWindow());
+    }
+
+
+    private void positionPauseOverlay() {
+        if (pauseOverlay == null) return;
+        pauseOverlay.setBounds(20, 20, getWidth() - 40, getHeight() - 40);
+        // reposition child buttons if added earlier
+        for (Component c : pauseOverlay.getComponents()) {
+            if (c instanceof JButton) {
+                // reposition by name bounds (we used fixed bounds above)
+                // keep them centered
+                JButton b = (JButton) c;
+                if ("RESUME".equals(b.getText())) {
+                    b.setBounds((pauseOverlay.getWidth() - 200) / 2, 180, 200, 50);
+                } else if ("QUIT".equals(b.getText())) {
+                    b.setBounds((pauseOverlay.getWidth() - 200) / 2, 260, 200, 50);
+                }
+            }
+        }
+        pauseOverlay.revalidate();
+        pauseOverlay.repaint();
+    }
+
+    private void closePauseOverlay() {
+        if (pauseOverlay != null) {
+            remove(pauseOverlay);
+            pauseOverlay = null;
+        }
+        gamePaused = false;
+
+        // request focus back so KeyListener works again
+        SwingUtilities.invokeLater(() -> {
+            requestFocusInWindow();
+            repaint();
+        });
+    }
+
+    private void goToHomeScreen() {
+        JFrame frame = (JFrame) SwingUtilities.getWindowAncestor(this);
+        frame.getContentPane().removeAll();
+        frame.getContentPane().add(new HomeScreen(new SoundManager()));
+        frame.revalidate();
+        frame.repaint();
     }
 
     @Override
@@ -279,31 +496,56 @@ public class GameArena extends JPanel {
         g.drawLine(20, getHeight() - 20, getWidth() - 20, getHeight() - 20);
 
         // Projectiles
-        for (Projectile p : projectiles) {
-            p.draw(g);
-        }
+        for (Projectile p : projectiles) p.draw(g);
 
-        // Dash ghost
+        // Dash ghost — real sprite now
         if (dashFramesLeft > 0) {
-            g.setColor(new Color(0, 255, 0, 100));
-            g.fillRect(player.getX() - dashVelocityX, player.getY(), player.getWidth(), player.getHeight());
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.35f));
+            g2.drawImage(player.getCurrentFrame(),
+                    player.getX() - dashVelocityX,
+                    player.getY(),
+                    player.getWidth(),
+                    player.getHeight(),
+                    null);
+            g2.dispose();
         }
 
-        // Sandevistan trail
+        // Sandevistan trail — rainbow-tinted PNG-like sprites
         if (sandevistanActive) {
-            g.setColor(new Color(0, 200, 255, 120));
-            for (int[] pos : trailPositions) {
-                if (pos[0] != 0 || pos[1] != 0) {
-                    g.fillRect(pos[0], pos[1], player.getWidth(), player.getHeight());
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.5f)); // base alpha
+
+            for (int i = 0; i < TRAIL_SIZE; i++) {
+                if (trailFrames[i] != null) {
+                    BufferedImage tinted = new BufferedImage(trailFrames[i].getWidth(),
+                            trailFrames[i].getHeight(), BufferedImage.TYPE_INT_ARGB);
+                    Graphics2D tg = tinted.createGraphics();
+                    tg.drawImage(trailFrames[i], 0, 0, null);
+                    tg.setComposite(AlphaComposite.SrcAtop.derive(0.7f));
+                    tg.setColor(getRainbowColor(i));
+                    tg.fillRect(0, 0, tinted.getWidth(), tinted.getHeight());
+                    tg.dispose();
+
+                    g2.drawImage(tinted,
+                            trailPositions[i][0],
+                            trailPositions[i][1],
+                            player.getWidth(),
+                            player.getHeight(),
+                            null);
                 }
             }
+            g2.dispose();
         }
 
-        // Time Stop overlay (flashing)
-        if (timeStopActive) {
-            int alpha = (int) (128 + 127 * Math.sin(System.currentTimeMillis() / 100.0));
-            g.setColor(new Color(255, 255, 0, alpha));
-            g.fillRect(20, 20, getWidth() - 40, getHeight() - 40);
+        // Time Stop flashing effect — only for the first flashingFramesLeft frames
+        if (timeStopActive && flashingFramesLeft > 0) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            float flashAlpha = (float) (0.5 + 0.5 * Math.sin(System.currentTimeMillis() / 20.0));
+            g2.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, flashAlpha));
+            g2.setColor(getRainbowColor(0));
+            g2.fillRect(20, 20, getWidth() - 40, getHeight() - 40);
+            g2.dispose();
         }
 
         // Player

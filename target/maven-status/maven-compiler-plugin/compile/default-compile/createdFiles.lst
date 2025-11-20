@@ -16,6 +16,7 @@ Main\SpriteAnimator.class
 com\mycompany\matrixdodger\Player.class
 Main\Main$1.class
 Main\MatrixBackground.class
+Main\GameArena$2.class
 Main\Main$2.class
 com\mycompany\matrixdodger\TitleScreen.class
 Main\MatrixDodgerTitleScreen$1.class

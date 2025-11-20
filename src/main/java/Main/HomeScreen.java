@@ -19,7 +19,7 @@ public class HomeScreen extends JPanel implements ActionListener {
     private JLabel characterLabel;
     private Timer idleAnimationTimer;
     private int animationFrame = 0;
-    private int playerCurrency = 1000; // Starting currency
+    private int playerCurrency = 100000; // Starting currency
     
     // Available skills with costs
     private Map<String, Integer> availableSkills = new HashMap<>();
@@ -173,7 +173,7 @@ private final int TOTAL_FRAMES = 7;
 
 private void startIdleAnimation() {
     loadSpriteFrames(); // load your images first
-    idleAnimationTimer = new Timer(50, e -> {
+    idleAnimationTimer = new Timer(100, e -> {
         animationFrame = (animationFrame + 1) % TOTAL_FRAMES;
         updateCharacterAnimation();
     });
