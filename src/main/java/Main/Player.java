@@ -36,19 +36,21 @@ public class Player {
     // -----------------------------------------------------
     // LOAD SPRITE FRAMES
     // -----------------------------------------------------
-    private void loadIdleFrames() {
-        try {
-            idleFrames = new BufferedImage[7]; // number of frames you said
-            for (int i = 0; i < 7; i++) {
-                String path = "/sprites/GamerGabby/frame"+i+".png";
-                URL url = getClass().getResource(path);
-                idleFrames[i] = ImageIO.read(url);
-            }
-        } catch (Exception e) {
-            System.err.println("⚠ Failed to load sprite frames!");
-            e.printStackTrace();
+private void loadIdleFrames() {
+    try {
+        idleFrames = new BufferedImage[7];
+        for (int i = 0; i < 7; i++) {
+            String path = "/sprites/GamerGabby/frame"+i+".png";
+            URL url = getClass().getResource(path);
+            idleFrames[i] = ImageIO.read(url);
         }
+        
+    } catch (Exception e) {
+        e.printStackTrace();
     }
+}
+
+
 
     // -----------------------------------------------------
     // ANIMATION UPDATE (call every tick)
@@ -112,28 +114,39 @@ public class Player {
     // -----------------------------------------------------
     // DRAW SPRITE
     // -----------------------------------------------------
-    public void draw(Graphics g) {
-        if (idleFrames == null) {
-            // fallback in case images fail
-            g.setColor(Color.BLUE);
-            g.fillRect(x, y, width, height);
-            return;
-        }
+public void draw(Graphics g) {
 
-        BufferedImage frame = idleFrames[frameIndex];
-        if (!facingRight) frame = flip(frame);
-
-        Graphics2D g2 = (Graphics2D) g.create();
-
-        // Tilt when running
-        if (isRunning) {
-            double angle = Math.toRadians(facingRight ? 10 : -10);
-            g2.rotate(angle, x + width / 2.0, y + height / 2.0);
-        }
-
-        g2.drawImage(frame, x, y, width, height, null);
-        g2.dispose();
+    if (idleFrames == null) {
+        g.setColor(Color.BLUE);
+        g.fillRect(x, y, width, height);
+        return;
     }
+
+    BufferedImage frame = idleFrames[frameIndex];
+    if (!facingRight) frame = flip(frame);
+
+    // ALWAYS create a fresh, isolated Graphics2D
+    Graphics2D g2 = (Graphics2D) g.create();
+
+    // Reset all transforms and clips to avoid outside interference
+    g2.setTransform(new java.awt.geom.AffineTransform());
+    g2.setClip(null);
+
+    // Move to player position
+    g2.translate(x, y);
+
+    // Apply tilt ONLY here (no world-based rotation)
+    if (isRunning) {
+        double angle = Math.toRadians(facingRight ? 10 : -10);
+        g2.rotate(angle, width / 2.0, height / 2.0);
+    }
+
+    // Draw sprite
+    g2.drawImage(frame, 0, 0, width, height, null);
+
+    g2.dispose();
+}
+
 
     // -----------------------------------------------------
     // Sprite flip util for left movement
@@ -158,6 +171,49 @@ public class Player {
         if (!facingRight) frame = flip(frame);
         return frame;
     }
+    
+    // =====================================================
+// DAMAGE SYSTEM (supports auto-revive)
+// =====================================================
+private boolean dead = false;
+private int invincibleFrames = 0;
+private final int HIT_INVINCIBILITY = 40; // 40 frames ~ 0.6s blink
+
+public boolean takeDamage(GameManager gm) {
+    if (dead || isInvincible) return false;  // ignore damage if invincible
+
+    lives--;
+    
+    // Start short invincibility
+    invincibleFrames = HIT_INVINCIBILITY;
+    isInvincible = true;
+
+    gm.soundManager.playSound("hit");
+
+    // Player dies
+    if (lives <= 0) {
+
+        // Try auto-revive
+        if (gm.tryAutoRevive(this)) {
+            return false; 
+        }
+
+        dead = true;
+        gm.soundManager.playSound("finalhit");
+        return true;
+    }
+
+    return false;
+}
+
+
+public void updateInvincibility() {
+    if (invincibleFrames > 0) {
+        invincibleFrames--;
+        isInvincible = invincibleFrames > 0;
+    }
+}
+
 
     // -----------------------------------------------------
     // Getters & Setters
@@ -167,6 +223,7 @@ public class Player {
     public int getWidth() { return width; }
     public int getHeight() { return height; }
     public int getLives() { return lives; }
+    public int setLives(int health) { return lives = health; }
     
     public boolean isFacingLeft() {
         return facingLeft;

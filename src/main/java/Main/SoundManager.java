@@ -1,77 +1,52 @@
 package Main;
 
 import javax.sound.sampled.*;
-import java.io.*;
+import java.io.IOException;
+import java.net.URL;
 import java.util.HashMap;
-import java.util.Map;
 
 public class SoundManager {
-    private Map<String, Clip> soundCache;
-    private Clip backgroundMusic;
-    
+
+    private HashMap<String, Clip> soundMap = new HashMap<>();
+
     public SoundManager() {
-        soundCache = new HashMap<>();
-        preloadSounds();
+        load("jump", "/sfx/retro-jump-1-236684.wav");
+        load("hit", "/sfx/retro-explode-1-236678.wav");
+        load("finalHit", "/sfx/retro-explode-2-236688.wav");
+        load("select", "/sfx/retro-select-236670.wav");
+        load("blink", "/sfx/teleport.wav");
+        load("sandevistan", "/sfx/sandevistan.wav");
+        load("timestop", "/sfx/timestop.wav");
     }
-    
-    private void preloadSounds() {
-        // Preload frequently used sounds
-        preloadSound("select", "sounds/select.wav");
-        preloadSound("explosion", "sounds/explosion.wav");
-        preloadSound("powerup", "sounds/powerup.wav");
-    }
-    
-    private void preloadSound(String name, String filename) {
+
+    private void load(String key, String path) {
         try {
-            File soundFile = new File(filename);
-            AudioInputStream audioIn = AudioSystem.getAudioInputStream(soundFile);
+            URL resource = getClass().getResource(path);
+            if (resource == null) {
+                System.err.println("❌ Sound not found: " + path);
+                return;
+            }
+
+            AudioInputStream audioIn = AudioSystem.getAudioInputStream(resource);
             Clip clip = AudioSystem.getClip();
             clip.open(audioIn);
-            soundCache.put(name, clip);
-        } catch (Exception e) {
-            System.err.println("Could not load sound: " + filename);
+
+            soundMap.put(key, clip);
+
+        } catch (UnsupportedAudioFileException | IOException | LineUnavailableException e) {
+            System.err.println("❌ Error loading sound: " + path);
+            e.printStackTrace();
         }
     }
-    
-    public void playSound(String name) {
-        Clip clip = soundCache.get(name);
-        if (clip != null) {
-            // Reset clip to beginning if it's still playing
-            if (clip.isRunning()) {
-                clip.stop();
-            }
-            clip.setFramePosition(0);
-            clip.start();
+
+    public void playSound(String key) {
+        Clip clip = soundMap.get(key);
+        if (clip == null) return;
+
+        if (clip.isRunning()) {
+            clip.stop();     // restart
         }
-    }
-    
-    public void playBackgroundMusic(String filename) {
-        try {
-            if (backgroundMusic != null && backgroundMusic.isRunning()) {
-                backgroundMusic.stop();
-            }
-            
-            File musicFile = new File(filename);
-            AudioInputStream audioIn = AudioSystem.getAudioInputStream(musicFile);
-            backgroundMusic = AudioSystem.getClip();
-            backgroundMusic.open(audioIn);
-            backgroundMusic.loop(Clip.LOOP_CONTINUOUSLY);
-        } catch (Exception e) {
-            System.err.println("Could not load background music: " + filename);
-        }
-    }
-    
-    public void stopBackgroundMusic() {
-        if (backgroundMusic != null && backgroundMusic.isRunning()) {
-            backgroundMusic.stop();
-        }
-    }
-    
-    public void setVolume(String name, float volume) {
-        Clip clip = soundCache.get(name);
-        if (clip != null) {
-            FloatControl gainControl = (FloatControl) clip.getControl(FloatControl.Type.MASTER_GAIN);
-            gainControl.setValue(volume); // Reduce volume by 10 decibels
-        }
+        clip.setFramePosition(0);
+        clip.start();
     }
 }
